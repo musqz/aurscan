@@ -17,7 +17,7 @@
 
 Reading a PKGBUILD yourself only catches attacks you already recognise. **aurscan** reads a package's `PKGBUILD`, `.install` scriptlets, `.SRCINFO` and helper scripts **before `makepkg` executes a single line**, and blocks the build if the script looks malicious.
 
-It runs in two stages: **fast deterministic static rules** (offline, zero-cost) catch the known campaign signatures, then a **Claude or local model** — informed by those rule hits and the package's AUR reputation — makes the judgement call on the subtle cases. With no model configured at all, the static rules alone still produce a fail-closed verdict, so you're protected even fully offline.
+It runs in two stages: **fast deterministic static rules** (offline, zero-cost) catch the known campaign signatures, then a **Claude, Codex, or local model** — informed by those rule hits and the package's AUR reputation — makes the judgement call on the subtle cases. With no model configured at all, the static rules alone still produce a fail-closed verdict, so you're protected even fully offline.
 
 > [!WARNING]
 > An LLM scanner is a strong **extra layer, not a guarantee**. Keep building in a clean chroot, prefer official-repo packages, and stay wary of freshly-adopted orphaned packages. See [Limitations](#%EF%B8%8F-limitations).
@@ -135,9 +135,10 @@ Auto-detected, in this order — **option 1 needs no API key at all**:
 
 1. **Claude Code CLI** (`claude`) in `PATH` and logged in → uses your existing Claude subscription. Reports **exact cost** per scan.
 2. **`ANTHROPIC_API_KEY`** → direct API (`claude-sonnet-4-6` by default). Reports exact tokens; cost computed from a built-in price table.
-3. **Local / self-hosted model** via `AURSCAN_OPENAI_URL` → any OpenAI-compatible `/chat/completions` endpoint (**llama.cpp, Ollama, vLLM, LocalAI**). Fully private; set `AURSCAN_OPENAI_URL_FALLBACK` for automatic failover (e.g. GPU host → local CPU). The model is swappable via `AURSCAN_OPENAI_MODEL`.
-4. **`AURSCAN_BACKEND=/path/to/cmd`** → any executable that reads the prompt on stdin and prints the reply on stdout.
-5. **No backend at all** → static rules still run and block on critical matches.
+3. **Codex CLI** (`codex`) in `PATH` and logged in → uses your existing Codex subscription. Tokens and cost are estimated/not available from the CLI output.
+4. **Local / self-hosted model** via `AURSCAN_OPENAI_URL` → any OpenAI-compatible `/chat/completions` endpoint (**llama.cpp, Ollama, vLLM, LocalAI**). Fully private; set `AURSCAN_OPENAI_URL_FALLBACK` for automatic failover (e.g. GPU host → local CPU). The model is swappable via `AURSCAN_OPENAI_MODEL`.
+5. **`AURSCAN_BACKEND=/path/to/cmd`** → any executable that reads the prompt on stdin and prints the reply on stdout.
+6. **No backend at all** → static rules still run and block on critical matches.
 
 <details>
 <summary>Local model example (llama.cpp / Ollama)</summary>
@@ -216,7 +217,27 @@ syay <anything>             # normal yay usage; the scanner gates AUR builds
 aurscan <pkgname> [...]     # standalone scan (fetches the AUR snapshot in memory)
 aurscan ./builddir          # scan a local build directory
 aurscan --update-check      # audit pending AUR updates without installing anything
+aurscan --gen-file          # write pending AUR updates to ./aurscan.paclist
+aurscan --scan-file         # scan packages listed in ./aurscan.paclist
 ```
+
+**Offline admin workflow.** If you maintain machines that do not have an LLM
+backend configured, install aurscan there and run:
+
+```bash
+aurscan --gen-file
+```
+
+That overwrites `./aurscan.paclist` with a structured list of pending AUR
+updates from `yay -Qua`. Copy that single file to your scanner machine and run:
+
+```bash
+aurscan --scan-file
+```
+
+The scan command requires `aurscan.paclist` in the current directory, validates
+that it is an aurscan-generated file, and scans the listed packages through the
+same recursive AUR scanner used by `--update-check`.
 
 When a package is flagged:
 
@@ -280,6 +301,7 @@ scanner usage: 1 call(s) · tokens: 12,431 in / 214 out · $0.0413
 | Backend | Tokens | Cost |
 |---|---|---|
 | Claude Code CLI | exact | exact (`total_cost_usd`) |
+| Codex CLI | estimated (`~`) | `cost n/a` |
 | API key | exact | computed from price table |
 | Custom command | estimated (`~`) | `cost n/a` |
 
@@ -289,8 +311,9 @@ Override the API price table (USD per million tokens) so you never depend on a s
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AURSCAN_BACKEND` | auto | `claude` · `api` · `openai` · `/path/to/cmd` |
+| `AURSCAN_BACKEND` | auto | `claude` · `codex` · `api` · `openai` · `/path/to/cmd` |
 | `AURSCAN_MODEL` | `claude-sonnet-4-6` | model id for the API backend |
+| `AURSCAN_CODEX_MODEL` | Codex default | model id passed to `codex exec` |
 | `AURSCAN_MAX_PKGS` | `25` | recursion cap for AUR dependency scanning |
 | `AURSCAN_PRICE_IN` / `AURSCAN_PRICE_OUT` | built-in | USD per million tokens |
 | `AURSCAN_OPENAI_URL` / `_FALLBACK` | — | OpenAI-compatible endpoint(s) for a local model |
