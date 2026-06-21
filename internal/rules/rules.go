@@ -92,6 +92,20 @@ var catalog = []Rule{
 	// --- Critical: the 2025/2026 AUR campaign signatures --------------------
 	mk("NPM-001", "npm/bun install at build/install", Critical, `(?i)\b(npm|npx|bun|pnpm|yarn)\s+(install|add|x|run|exec)\b`),
 	mk("NPM-002", "Known malicious npm payload", Critical, `(?i)\b(atomic-lockfile|lockfile-js|js-digest)\b`),
+	// --- Critical/High: Unicode obfuscation (Trojan Source / homoglyph) ------
+	// Bidirectional controls reorder how a line *displays* vs how it parses
+	// (CVE-2021-42574); zero-width/BOM characters split tokens to evade regex
+	// and hide content. Neither has any legitimate use in a build script, so
+	// these are scanned even inside comments (see scanEvenInComments).
+	mk("UNI-001", "Bidirectional control character", Critical, `[\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200E}\x{200F}]`),
+	mk("UNI-002", "Zero-width / BOM character", Critical, `[\x{200B}-\x{200D}\x{2060}\x{FEFF}]`),
+	// A punycode (xn--) host in a source URL is near-never legitimate on the AUR
+	// and is a strong sign of a deliberately disguised domain.
+	mk("URL-004", "Punycode (xn--) host", High, `(?i)https?://(?:[a-z0-9.\-]+\.)?xn--`),
+	// Non-ASCII inside a source=() array or URL is the homoglyph signal: a host
+	// that *looks* like github.com but uses e.g. a Cyrillic letter. Scoped to
+	// URL/source context so legitimate UTF-8 in pkgdesc or comments is ignored.
+	mk("UNI-003", "Non-ASCII character in URL/source", High, `(?i)(source=\([^)]*|https?://[^\s"')]*)[^\x00-\x7F]`),
 	// --- High: obfuscation & sourcing ---------------------------------------
 	mk("OBF-001", "base64 decode", High, `(?i)base64\s+(-d|--decode)`),
 	mk("OBF-002", "eval of dynamic string", High, `(?i)\beval\b`),
@@ -120,8 +134,11 @@ var vcsLine = regexp.MustCompile(`(?i)^\s*source=.*\b(git|svn|hg|bzr)\+`)
 var commentLine = regexp.MustCompile(`^[ \t]*#`)
 
 // gitSourceHost captures the host of a VCS source URL, e.g.
-// `git+https://github.com/u/r.git` -> "github.com".
-var gitSourceHost = regexp.MustCompile(`(?i)\b(?:git|svn|hg|bzr)\+https?://([a-z0-9.\-]+)`)
+// `git+https://github.com/u/r.git` -> "github.com". The capture intentionally
+// accepts non-ASCII so a homoglyph host (e.g. a Cyrillic "github.com") is
+// reported as-is rather than truncated; ':' and '/' are excluded so a port or
+// path does not bleed into the host.
+var gitSourceHost = regexp.MustCompile(`(?i)\b(?:git|svn|hg|bzr)\+https?://([^\s/:"')]+)`)
 
 // reputableGitHosts is an allowlist of well-known forges and official
 // distribution / upstream Git hosts. A VCS source on any of these is normal and
@@ -193,7 +210,7 @@ func Scan(files map[string]string) []Hit {
 			// Find the first match that is not on a commented-out line. AI
 			// prompt-injection text is still relevant in comments because the
 			// model sees comments as package text.
-			idx := firstLiveMatch(text, r.re, !isAIRule(r.Code))
+			idx := firstLiveMatch(text, r.re, !scanEvenInComments(r.Code))
 			if idx < 0 {
 				continue
 			}
@@ -236,6 +253,13 @@ func firstLiveMatch(text string, re *regexp.Regexp, skipComments bool) int {
 
 func isAIRule(code string) bool {
 	return strings.HasPrefix(code, "AI-")
+}
+
+// scanEvenInComments lists rules whose pattern is meaningful even on a
+// commented-out line: AI prompt-injection text (the model reads comments) and
+// bidi/zero-width characters (Trojan Source hides them in comments).
+func scanEvenInComments(code string) bool {
+	return isAIRule(code) || code == "UNI-001" || code == "UNI-002"
 }
 
 // isCommentAt reports whether the line containing offset idx is a full-line

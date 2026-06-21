@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Unicode-abuse detection.** New static rules flag bidirectional control
+  characters and zero-width/BOM characters (Trojan Source, CVE-2021-42574),
+  punycode (`xn--`) hosts, and non-ASCII characters inside source URLs
+  (homoglyph host impersonation). The auditor prompt now also reasons about
+  visual look-alike hosts and percent-encoded control characters, which static
+  rules cannot decode. The VCS-host extractor was widened so a homoglyph host is
+  reported in full rather than truncated.
+
+### Added
 - **Native yay v13 integration.** `aurscan --install-yay-hook` registers an
   `AURPostDownload` Lua hook in `~/.config/yay/init.lua`, so plain `yay` (v13+)
   scans every AUR package after `makepkg --verifysource` and before build — no

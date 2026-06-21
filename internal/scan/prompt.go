@@ -53,6 +53,14 @@ helper files:
 - sudo/pkexec/setuid manipulation; pacman hooks the package installs for itself.
 - source=() entries pointing at typo-squatted, recently-registered or
   non-canonical domains for well-known software; mismatched upstream.
+- A source host that visually impersonates a trusted forge: judge it by its
+  actual characters, not its appearance. A non-ASCII or punycode (xn--) host is
+  almost always a homoglyph attack (e.g. a Cyrillic letter standing in for a
+  Latin one so the host reads as "github.com"); ASCII look-alikes count too
+  (rn->m, 0->O, l->I, vv->w). Be suspicious of percent-encoded control
+  characters in URLs (%E2%80%AE is a bidi override, %E2%80%8B a zero-width
+  space) and of bidirectional or zero-width characters anywhere in the scripts,
+  which exist only to make what you read differ from what runs.
 - Suspicious mismatch between pkgname/pkgdesc and what the scripts actually do.
 
 REPUTATION & PROVENANCE — weigh these heavily when signals are provided:

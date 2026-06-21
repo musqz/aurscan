@@ -134,3 +134,49 @@ package() { cd "$srcdir/hello-2.12"; make DESTDIR="$pkgdir" install; }`}
 		t.Errorf("clean package flagged critical: %v", Scan(files))
 	}
 }
+
+func TestDetectsUnicodeAbuse(t *testing.T) {
+	cyr := "\u0456"  // Cyrillic small i, homoglyph of ASCII 'i'
+	rlo := "\u202e"  // right-to-left override (Trojan Source)
+	zwsp := "\u200b" // zero-width space
+	cases := []struct {
+		name, content, wantCode string
+	}{
+		{"punycode-host", "source=(\"git+https://xn--gthub-7va.com/u/r.git\")", "URL-004"},
+		{"homoglyph-host", "source=(\"git+https://g" + cyr + "thub.com/u/r.git\")", "UNI-003"},
+		{"bidi-in-url", "source=(\"https://example.com/" + rlo + "gpj.bad\")", "UNI-001"},
+		{"zero-width-split", "source=(\"https://git" + zwsp + "hub.com/u/r.git\")", "UNI-002"},
+		{"bidi-in-comment", "# totally safe " + rlo + " rm -rf", "UNI-001"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hits := Scan(map[string]string{"PKGBUILD": c.content})
+			found := false
+			for _, h := range hits {
+				if h.Code == c.wantCode {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: expected %s, got %v", c.name, c.wantCode, hits)
+			}
+		})
+	}
+}
+
+func TestHomoglyphHostReportedCleanly(t *testing.T) {
+	// The widened gitSourceHost capture must yield the full non-ASCII host so
+	// SRC-001 reports it (rather than truncating at the first non-ASCII byte).
+	cyr := "\u0456"
+	host := "g" + cyr + "thub.com"
+	hits := Scan(map[string]string{"PKGBUILD": "source=(\"git+https://" + host + "/u/r.git\")"})
+	var src1 bool
+	for _, h := range hits {
+		if h.Code == "SRC-001" {
+			src1 = true
+		}
+	}
+	if !src1 {
+		t.Errorf("homoglyph host should trip SRC-001 (uncommon host); got %v", hits)
+	}
+}

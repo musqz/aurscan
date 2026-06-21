@@ -63,3 +63,24 @@ func TestIssue10TruePositivesStillFire(t *testing.T) {
 		})
 	}
 }
+
+// Legitimate UTF-8 in non-URL fields must not trigger the Unicode-abuse rules.
+func TestUnicodeFalsePositives(t *testing.T) {
+	cases := []struct{ name, file, content, mustNot string }{
+		{"utf8-pkgdesc", "PKGBUILD", "pkgdesc=\"Aplicaci\u00f3n para caf\u00e9\"", "UNI-003"},
+		{"utf8-pkgdesc-uni1", "PKGBUILD", "pkgdesc=\"Aplicaci\u00f3n para caf\u00e9\"", "UNI-001"},
+		{"utf8-comment", "PKGBUILD", "# build tool caf\u00e9 \U0001F680", "UNI-003"},
+		{"utf8-maintainer", "PKGBUILD", "# Maintainer: J\u00fcrgen M\u00fcller <j@example.com>", "UNI-003"},
+		{"ascii-github", "PKGBUILD", "source=(\"git+https://github.com/u/r.git\")", "UNI-003"},
+		{"ascii-github-uni1", "PKGBUILD", "source=(\"git+https://github.com/u/r.git\")", "URL-004"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, h := range Scan(map[string]string{c.file: c.content}) {
+				if h.Code == c.mustNot {
+					t.Errorf("%s wrongly fired on %q", c.mustNot, c.content)
+				}
+			}
+		})
+	}
+}
