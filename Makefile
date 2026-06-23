@@ -12,7 +12,18 @@ LDFLAGS := -s -w \
 	-X $(PKGPATH).Version=$(VERSION) \
 	-X $(PKGPATH).Commit=$(COMMIT) \
 	-X $(PKGPATH).Date=$(DATE)
-GOFLAGS := -trimpath -ldflags="$(LDFLAGS)"
+GOFLAGS := -trimpath -buildmode=pie -ldflags="$(LDFLAGS)"
+
+# Release artifacts are hardened to match Arch's Go package guidelines: PIE +
+# full RELRO, while staying static and portable. Full RELRO (DT_BIND_NOW) needs
+# the external linker, so CGO is enabled purely as the link driver; netgo and
+# osusergo force Go's pure-Go resolver/user lookup so the binary stays static
+# with no glibc NSS at runtime. arm64 cross-links with aarch64-linux-gnu-gcc
+# (override CC_arm64 if your toolchain differs). This matches the release CI so
+# `make release` reproduces the published binaries (#30).
+CC_arm64    ?= aarch64-linux-gnu-gcc
+REL_LDFLAGS := $(LDFLAGS) -linkmode=external -extldflags '-static-pie -Wl,-z,relro -Wl,-z,now'
+REL_FLAGS   := -trimpath -buildmode=pie -tags 'netgo osusergo' -ldflags="$(REL_LDFLAGS)"
 
 build:
 	CGO_ENABLED=0 go build $(GOFLAGS) -o $(BIN) ./cmd/aurscan
@@ -24,16 +35,9 @@ test:
 	go vet ./...
 	go test ./...
 
-compress: build
-	@command -v upx >/dev/null || { echo "upx not found (pacman -S upx)"; exit 1; }
-	upx --best --lzma $(BIN)
-	upx -t $(BIN)
-
 release:
-	@command -v upx >/dev/null || { echo "upx not found (pacman -S upx)"; exit 1; }
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o aurscan-linux-amd64 ./cmd/aurscan
-	upx --best --lzma aurscan-linux-amd64 && upx -t aurscan-linux-amd64
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o aurscan-linux-arm64 ./cmd/aurscan
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(REL_FLAGS) -o aurscan-linux-amd64 ./cmd/aurscan
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_arm64) go build $(REL_FLAGS) -o aurscan-linux-arm64 ./cmd/aurscan
 
 install: build
 	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
@@ -43,4 +47,4 @@ install: build
 clean:
 	rm -f $(BIN) aurscan-linux-amd64 aurscan-linux-arm64
 
-.PHONY: build version test compress release install clean
+.PHONY: build version test release install clean

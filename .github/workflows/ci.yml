@@ -20,9 +20,11 @@ jobs:
       - run: go build ./...
       - run: go test ./...
 
-  # Builds release artifacts. UPX-packs amd64 only (arm64 UPX support is less
-  # reliable, so that artifact ships uncompressed). On a v* tag it also creates
-  # the GitHub Release; otherwise artifacts are just uploaded for inspection.
+  # Builds release artifacts as hardened static-PIE binaries (PIE + full RELRO,
+  # via the external linker; netgo+osusergo keep them static and portable). No
+  # UPX: it strips PIE/RELRO, trips antivirus, and hurts reproducibility for a
+  # marginal size win on an on-demand CLI (#30). On a v* tag it also creates the
+  # GitHub Release; otherwise artifacts are just uploaded for inspection.
   release:
     needs: test
     runs-on: ubuntu-latest
@@ -50,30 +52,47 @@ jobs:
           echo "date=$DATE"       >> "$GITHUB_OUTPUT"
           echo "Building $VERSION ($COMMIT)"
 
-      - name: build static binary (version-stamped)
+      - name: install C toolchain (external linker → PIE + full RELRO)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc binutils
+          if [ "${{ matrix.goarch }}" = "arm64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          fi
+
+      - name: build hardened static binary (PIE + full RELRO, version-stamped)
         env:
-          CGO_ENABLED: "0"
+          # CGO is enabled only to drive the external linker (needed for
+          # DT_BIND_NOW / full RELRO). netgo+osusergo force Go's pure resolver
+          # and user lookup, so the result stays fully static and portable —
+          # no glibc NSS at runtime. -static-pie gives a position-independent
+          # static ELF (ET_DYN) that satisfies namcap's PIE and FULL RELRO
+          # checks (#30).
+          CGO_ENABLED: "1"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
           PKG: github.com/manticore-projects/aurscan/internal/version
         run: |
-          go build -trimpath \
-            -ldflags="-s -w \
+          go build -trimpath -buildmode=pie -tags 'netgo osusergo' \
+            -ldflags="-s -w -linkmode=external \
+              -extldflags '-static-pie -Wl,-z,relro -Wl,-z,now' \
               -X ${PKG}.Version=${{ steps.ver.outputs.version }} \
               -X ${PKG}.Commit=${{ steps.ver.outputs.commit }} \
               -X ${PKG}.Date=${{ steps.ver.outputs.date }}" \
             -o aurscan-linux-${{ matrix.goarch }} ./cmd/aurscan
 
-      - name: verify version stamp (amd64)
+      - name: verify hardening (PIE + full RELRO + static)
+        run: |
+          bin=aurscan-linux-${{ matrix.goarch }}
+          readelf -h "$bin" | grep -q 'DYN (Position-Independent' || { echo "::error::$bin is not PIE (ET_DYN)"; exit 1; }
+          readelf -d "$bin" | grep -qi 'BIND_NOW'               || { echo "::error::$bin lacks full RELRO (no BIND_NOW)"; exit 1; }
+          file "$bin" | grep -q 'static-pie'                    || { echo "::error::$bin is not static-pie"; exit 1; }
+          echo "$bin: PIE + full RELRO + static-pie — ok"
+
+      - name: smoke test (amd64 only — the runner is amd64)
         if: matrix.goarch == 'amd64'
         run: ./aurscan-linux-amd64 --version
-
-      - name: compress with upx (amd64 only)
-        if: matrix.goarch == 'amd64'
-        run: |
-          sudo apt-get update && sudo apt-get install -y upx-ucl
-          upx --best --lzma aurscan-linux-${{ matrix.goarch }}
-          upx -t aurscan-linux-${{ matrix.goarch }}
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -128,7 +147,7 @@ jobs:
         working-directory: dist
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }} # e.g. 188331308EF56D11, or a dedicated CI subkey
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           gpg --batch --yes --pinentry-mode loopback \
             ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
