@@ -315,3 +315,25 @@ func TestSingleBackendFailureSilentOnStderr(t *testing.T) {
 		t.Fatalf("a lone backend failing must not print a 'trying next' warning, got %q", out)
 	}
 }
+
+// TestGenuineSuspiciousStopsChain pins the subtle invariant: a GENUINE
+// SUSPICIOUS from an early backend must stop the chain and must NOT be
+// overridden by a later backend's OK. (MALICIOUS is covered by
+// TestGenuineConfidenceZeroStopsChain; SUSPICIOUS is the trickier case because
+// it reads as "fail-ish" and a naive chain might keep trying for an OK.)
+func TestGenuineSuspiciousStopsChain(t *testing.T) {
+	first, _ := startStub(t, 200, openAIEnvelope(`{"verdict":"SUSPICIOUS","summary":"unverified source"}`))
+	second, secondHits := startStub(t, 200, openAIEnvelope(`{"verdict":"OK"}`))
+	t.Setenv("AURSCAN_BACKEND", "openai")
+	t.Setenv("AURSCAN_OPENAI_URL", first)
+	t.Setenv("AURSCAN_OPENAI_MODEL", "")
+	setExtraBackends(t, Backend{Kind: "openai", URL: second})
+
+	res := Scan("pkg", testFiles, Signals{})
+	if res.V.Verdict != "SUSPICIOUS" || res.Failed {
+		t.Fatalf("verdict=%q failed=%v, want SUSPICIOUS/false (genuine SUSPICIOUS must win)", res.V.Verdict, res.Failed)
+	}
+	if n := atomic.LoadInt32(secondHits); n != 0 {
+		t.Fatalf("second backend called %d time(s); a genuine SUSPICIOUS must stop the chain", n)
+	}
+}
