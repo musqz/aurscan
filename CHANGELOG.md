@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-23
+
 ### Added
+- **Backend fallback chain.** aurscan now tries every configured backend —
+  environment-detected backends first, then `~/.config/aurscan/llm1.conf …
+  llmN.conf` in order — before failing closed, instead of giving up on the
+  first one. A rate-limited or dead primary backend transparently falls through
+  to the next (Claude → Codex → local model → …). The first *genuine* verdict
+  wins; only an exhausted chain falls closed to `SUSPICIOUS`, exactly as before.
+  Behaviour is unchanged for a single healthy backend (#7, #35).
+- **Degraded-scan awareness on the build hooks.** A verdict produced by a
+  *fallback* backend (the primary was unavailable) is flagged and annotated. On
+  the unattended build-hook path a fallback-produced `OK` is treated as a
+  degraded scan: it requires explicit confirmation on a TTY and fails closed
+  without one, closing the path where forcing the primary backend to fail could
+  route approval to a weaker model. The standalone CLI stays lenient.
 - **Unicode-abuse detection.** New static rules flag bidirectional control
   characters and zero-width/BOM characters (Trojan Source, CVE-2021-42574),
   punycode (`xn--`) hosts, and non-ASCII characters inside source URLs
@@ -15,8 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visual look-alike hosts and percent-encoded control characters, which static
   rules cannot decode. The VCS-host extractor was widened so a homoglyph host is
   reported in full rather than truncated.
-
-### Added
 - **Native yay v13 integration.** `aurscan --install-yay-hook` registers an
   `AURPostDownload` Lua hook in `~/.config/yay/init.lua`, so plain `yay` (v13+)
   scans every AUR package after `makepkg --verifysource` and before build — no
@@ -32,7 +45,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restarting. Set `AURSCAN_OPENAI_MODEL` to pin a specific model on servers that
   require one.
 
+### Security
+- **Hardened release binaries (#30).** Release artifacts are now position-
+  independent (PIE) with full RELRO, built as static-PIE via the external linker
+  with the `netgo,osusergo` tags so they stay fully static and portable. UPX
+  packing was dropped: it stripped PIE/RELRO, tripped antivirus scanners, and
+  hurt reproducibility for a negligible size win on an on-demand CLI. Downstream
+  `-bin` packages now pass `namcap` cleanly.
+- **Signed release checksums (#31).** Release CI publishes a `SHA256SUMS` file
+  and a detached `SHA256SUMS.asc`, signed with the same key that signs the
+  release tags, so downloaded binaries can be verified independently of GitHub
+  transport.
+
 ### Fixed
+- **Coloured output on the paru hook path (#34).** Colour is re-enabled against
+  the controlling terminal when paru runs the hook with stdout redirected, and a
+  `CLICOLOR_FORCE` escape hatch was added. The "no colour with the Codex
+  backend" report was in fact the paru path, not the backend. (reported by
+  HaleTom)
+- **`syay` is operation-aware.** Non-build yay operations (`--version`, `-Ss`
+  search, `-Q` queries, `-Sy` refresh, …) pass straight through; the editor gate
+  is injected only when yay actually fetches and builds a package, making
+  `alias yay=syay` a safe drop-in. (PR by musqz)
+- **`yay -Qua` exit 1 handled.** A `1` exit meaning "no pending AUR updates" is
+  treated as an empty result rather than an error, so `--update-check` and
+  `--gen-file` no longer fail on an up-to-date system. (PR by musqz)
 - **paru interactive build decision now works (#3).** The `--prebuild` hook
   prompts over `/dev/tty`, so you can abort or override a flagged package even
   though paru runs `PreBuildCommand` with redirected stdio. With no controlling
@@ -43,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install/uninstall consistently target the user config and never need root.
   (reported by rynti)
 
+### Packaging
+- **`aur-sync` workflow.** On a new release tag, CI refreshes the `pkgver` and
+  `.SRCINFO` of the AUR packages so non-devel helper users are prompted to
+  update. It only bumps version metadata and never rewrites the PKGBUILD body.
 
 
 ## [0.4.1] - 2026-06-18
