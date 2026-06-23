@@ -2,7 +2,7 @@ name: ci
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -12,10 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history + tags so `git describe` works
+          fetch-depth: 0 # full history + tags so `git describe` works
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
@@ -27,17 +27,17 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # required to create the Release and upload assets
+      contents: write # required to create the Release and upload assets
     strategy:
       matrix:
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # tags needed for version stamping
+          fetch-depth: 0 # tags needed for version stamping
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
 
       - name: derive version
         id: ver
@@ -52,7 +52,7 @@ jobs:
 
       - name: build static binary (version-stamped)
         env:
-          CGO_ENABLED: '0'
+          CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           PKG: github.com/manticore-projects/aurscan/internal/version
@@ -86,3 +86,59 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: aurscan-linux-${{ matrix.goarch }}
+
+  # Publishes a signed SHA256SUMS covering BOTH release binaries so downstream
+  # consumers can verify the bytes they download against the project's GPG key
+  # (the same key that signs the release tags). Runs only on v* tags, after both
+  # matrix legs of `release` have built and attached their binaries (#31).
+  sign:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to attach the checksums + signature to the Release
+    steps:
+      - name: download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true # flatten both per-arch artifacts into dist/
+
+      - name: generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum aurscan-linux-amd64 aurscan-linux-arm64 > SHA256SUMS
+          echo "---- SHA256SUMS ----"; cat SHA256SUMS
+
+      - name: import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::GPG_PRIVATE_KEY secret is not set; cannot sign release assets (#31)."
+            exit 1
+          fi
+          export GNUPGHOME="$(mktemp -d)"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+          gpgconf --kill gpg-agent || true
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: sign SHA256SUMS (detached, armored)
+        working-directory: dist
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }} # e.g. 188331308EF56D11, or a dedicated CI subkey
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+            ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
+            ${GPG_KEY_ID:+--local-user "$GPG_KEY_ID"} \
+            --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          gpg --verify SHA256SUMS.asc SHA256SUMS
+
+      - name: attach checksums + signature to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.asc
