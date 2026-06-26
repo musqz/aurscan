@@ -48,9 +48,7 @@ const usage = `usage:
   sparu <paru args...>             transparent paru wrapper (symlink)`
 
 func main() {
-	config.LoadEnvFile()
 	scan.ExtraInstructions = config.ExtraInstructions()
-	scan.ExtraBackends = scan.BackendsFromConfig(config.LLMConfigs())
 	argv0 := os.Args[0]
 	args := os.Args[1:]
 
@@ -199,14 +197,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, ui.Red("error: ")+"nothing scanned")
 		os.Exit(3)
 	}
-	if ui.Gate(results, false) {
+	if ui.Gate(results) {
 		os.Exit(0)
 	}
 	os.Exit(maxInt(1, ui.WorstExit(results)))
 }
 
 func updateCheck() []scan.Result {
-	out, err := runAllowExit1("yay", "-Qua")
+	out, err := run("yay", "-Qua")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, ui.Red("error: ")+"yay -Qua failed: "+err.Error())
 		os.Exit(3)
