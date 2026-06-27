@@ -208,7 +208,7 @@ func main() {
 func updateCheck() []scan.Result {
 	out, err := runAllowExit1("yay", "-Qua")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, ui.Red("error: ")+"yay -Qua failed: "+err.Error())
+		fmt.Fprintln(os.Stderr, ui.Red("error: ")+"yay/paru -Qua failed: "+err.Error())
 		os.Exit(3)
 	}
 	var pending []string
