@@ -40,6 +40,8 @@ const usage = `usage:
   aurscan --prebuild <dir>         gate mode (paru PreBuildCommand / yay v13 hook)
   aurscan --install-paru-hook      enable scanning in paru.conf (no wrapper)
   aurscan --install-yay-hook       enable scanning in yay v13 init.lua (no wrapper)
+  aurscan --uninstall-paru-hook    remove aurscan hook from paru.conf
+  aurscan --uninstall-yay-hook     remove aurscan hook from yay init.lua
   aurscan --debug ...              trace LLM request/response to stderr
   aurscan --version                print version and exit
   syay <yay args...>               transparent yay wrapper (symlink)
