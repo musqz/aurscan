@@ -163,6 +163,8 @@ Extend the chain with priority-ordered config files `~/.config/aurscan/llm1.conf
 | `url` | endpoint override (`openai` `/chat/completions`, or an Anthropic-compatible `/v1/messages` gateway for `api`) |
 | `fallback` | secondary `openai` URL (intra-backend, like `AURSCAN_OPENAI_URL_FALLBACK`) |
 | `api_key` | bearer / `x-api-key` for this backend |
+| `temperature` | sampling temperature for `openai` (default `0.1`); reasoning models such as **Gemma** usually need `1.0` |
+| `max_tokens` | output-token budget (default `2000`); raise it for reasoning models that would otherwise spend the budget on hidden reasoning and return empty |
 
 ```ini
 # ~/.config/aurscan/llm1.conf — try the local GPU box first
@@ -173,6 +175,14 @@ model   = qwen2.5-coder-32b
 ```ini
 # ~/.config/aurscan/llm2.conf — then fall back to a custom command
 backend = /usr/local/bin/my-scanner
+```
+```ini
+# ~/.config/aurscan/llm3.conf — a reasoning model (Gemma) needs room to think
+backend     = openai
+url         = http://192.168.0.110:18080/v1/chat/completions
+model       = gemma-thinking
+temperature = 1.0      # Gemma is trained for temperature 1.0
+max_tokens  = 32000    # reasoning is counted against the budget
 ```
 
 - **Values are literal:** don't quote them, and a `#`/`;` starts a comment only at the start of a line (not inline).
@@ -330,6 +340,8 @@ aurscan --debug --score ./PKGBUILD
 | `AURSCAN_OPENAI_URL` / `_FALLBACK` | — | OpenAI-compatible endpoint(s) for a local model |
 | `AURSCAN_OPENAI_MODEL` | omitted | when unset, no `model` field is sent, so a routing proxy (LiteLLM, etc.) can pick the model; set it to pin a specific model on servers that require one |
 | `AURSCAN_OPENAI_API_KEY` | `OPENAI_API_KEY` | bearer token for the endpoint (e.g. LiteLLM); omit for open servers |
+| `AURSCAN_OPENAI_TEMPERATURE` | `0.1` | sampling temperature; set `1.0` for reasoning models like Gemma |
+| `AURSCAN_OPENAI_MAX_TOKENS` | `2000` | output-token budget; raise for reasoning models (empty reply with `finish_reason=length`) |
 | `AURSCAN_TIMEOUT` | `180` | per-request budget in **seconds**; raise it for slow CPU-only models |
 | `AURSCAN_INSTRUCTIONS` | — | path to extra auditor instructions (appended) |
 | `AURSCAN_RULES_ONLY` | — | `1` = static rules only, never call a model |

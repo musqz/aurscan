@@ -91,6 +91,7 @@ var llmConfRe = regexp.MustCompile(`^llm(\d+)\.conf$`)
 // else is ignored, so future keys can be added without breaking older binaries.
 var llmConfKeys = map[string]bool{
 	"backend": true, "model": true, "url": true, "fallback": true, "api_key": true,
+	"temperature": true, "max_tokens": true,
 }
 
 // LLMConfigs loads the priority-ordered backend config files under the config

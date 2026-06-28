@@ -19,6 +19,11 @@ const (
 	apiURL         = "https://api.anthropic.com/v1/messages"
 	defaultTimeout = 180 * time.Second
 	maxOutTokens   = 2000
+
+	// defaultTemperature is conservative for deterministic auditing. Reasoning
+	// models (e.g. Gemma) usually need 1.0 — set it per backend in llmN.conf
+	// (temperature=) or via AURSCAN_OPENAI_TEMPERATURE.
+	defaultTemperature = 0.1
 )
 
 // llmTimeout is the per-request deadline. It defaults to defaultTimeout but can
@@ -59,6 +64,14 @@ type Backend struct {
 	URL      string // openai /chat/completions URL (or an Anthropic-compatible /v1/messages gateway for "api")
 	Fallback string // openai secondary URL (intra-backend, like AURSCAN_OPENAI_URL_FALLBACK)
 	APIKey   string // ANTHROPIC_API_KEY / AURSCAN_OPENAI_API_KEY
+	// Temperature is the sampling temperature for the openai backend. nil means
+	// "unset" (use AURSCAN_OPENAI_TEMPERATURE or the default). Reasoning models
+	// such as Gemma generally require temperature=1.0.
+	Temperature *float64
+	// MaxTokens is the output-token budget. 0 means "unset" (use the env var or
+	// the default). Reasoning models spend the budget on hidden reasoning before
+	// the answer, so a small cap can be exhausted before any content is emitted.
+	MaxTokens int
 }
 
 // String renders a Backend for debug output with the secret redacted.
@@ -112,6 +125,20 @@ func BackendsFromConfig(maps []map[string]string) []Backend {
 			continue
 		}
 		be.Model, be.URL, be.Fallback, be.APIKey = m["model"], m["url"], m["fallback"], m["api_key"]
+		if v := m["temperature"]; v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				be.Temperature = &f
+			} else {
+				dbg("config: invalid temperature=%q (ignored)", v)
+			}
+		}
+		if v := m["max_tokens"]; v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				be.MaxTokens = n
+			} else {
+				dbg("config: invalid max_tokens=%q (ignored)", v)
+			}
+		}
 		out = append(out, be)
 	}
 	return out
@@ -385,9 +412,13 @@ func callCodexCLI(ctx context.Context, be Backend, instructions, content string,
 
 func callAPI(ctx context.Context, be Backend, instructions, content string) (string, Usage, error) {
 	model := nz(be.Model, DefaultModel())
+	maxTok := maxOutTokens
+	if be.MaxTokens > 0 {
+		maxTok = be.MaxTokens
+	}
 	body, _ := json.Marshal(map[string]any{
 		"model":      model,
-		"max_tokens": maxOutTokens,
+		"max_tokens": maxTok,
 		"system":     instructions,
 		"messages":   []map[string]string{{"role": "user", "content": content}},
 	})
@@ -432,6 +463,39 @@ func callAPI(ctx context.Context, be Backend, instructions, content string) (str
 	return sb.String(), u, nil
 }
 
+// resolveTemperature picks the openai sampling temperature: an explicit
+// per-backend value (llmN.conf temperature=) wins, then AURSCAN_OPENAI_TEMPERATURE,
+// then defaultTemperature. Reasoning models such as Gemma generally need 1.0.
+func resolveTemperature(be Backend) float64 {
+	if be.Temperature != nil {
+		return *be.Temperature
+	}
+	if v := os.Getenv("AURSCAN_OPENAI_TEMPERATURE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+		dbg("ignoring invalid AURSCAN_OPENAI_TEMPERATURE=%q", v)
+	}
+	return defaultTemperature
+}
+
+// resolveMaxTokens picks the output-token budget: per-backend (llmN.conf
+// max_tokens=) wins, then AURSCAN_OPENAI_MAX_TOKENS, then maxOutTokens. Reasoning
+// models spend the budget on hidden reasoning before the answer, so the default
+// cap can be exhausted before any content is produced — raise it for them.
+func resolveMaxTokens(be Backend) int {
+	if be.MaxTokens > 0 {
+		return be.MaxTokens
+	}
+	if v := os.Getenv("AURSCAN_OPENAI_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+		dbg("ignoring invalid AURSCAN_OPENAI_MAX_TOKENS=%q", v)
+	}
+	return maxOutTokens
+}
+
 // callOpenAI talks to an OpenAI-compatible /chat/completions endpoint
 // (llama.cpp, Ollama, vLLM, LocalAI, …). It tries AURSCAN_OPENAI_URL first and
 // AURSCAN_OPENAI_URL_FALLBACK second, so a primary GPU host can fall back to a
@@ -459,9 +523,10 @@ func callOpenAI(parent context.Context, to time.Duration, be Backend, instructio
 	// lets a routing proxy (LiteLLM and similar) select the model itself, so you
 	// can switch models at the proxy without touching this env var or restarting.
 	// Set AURSCAN_OPENAI_MODEL for servers that require an explicit model.
+	maxTok := resolveMaxTokens(be)
 	payload := map[string]any{
-		"temperature":     0.1,
-		"max_tokens":      maxOutTokens,
+		"temperature":     resolveTemperature(be),
+		"max_tokens":      maxTok,
 		"response_format": map[string]string{"type": "json_object"},
 		"messages": []map[string]string{
 			{"role": "system", "content": instructions},
@@ -498,8 +563,10 @@ func callOpenAI(parent context.Context, to time.Duration, be Backend, instructio
 			}
 			var out struct {
 				Choices []struct {
-					Message struct {
-						Content string `json:"content"`
+					FinishReason string `json:"finish_reason"`
+					Message      struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
 					} `json:"message"`
 				} `json:"choices"`
 				Usage struct {
@@ -511,6 +578,20 @@ func callOpenAI(parent context.Context, to time.Duration, be Backend, instructio
 				return "", Usage{}, fmt.Errorf("openai: unparseable response from %s", u)
 			}
 			text := out.Choices[0].Message.Content
+			if strings.TrimSpace(text) == "" {
+				// A reasoning model can spend the whole budget on hidden
+				// reasoning and emit no content (finish_reason=length, with the
+				// reasoning in reasoning_content). Make that actionable instead
+				// of returning a silent empty verdict.
+				fr := out.Choices[0].FinishReason
+				if fr == "length" || out.Choices[0].Message.ReasoningContent != "" {
+					return "", Usage{}, fmt.Errorf(
+						"openai: model emitted no content (finish_reason=%q) — a reasoning model likely "+
+							"exhausted max_tokens=%d before answering. Raise it (llmN.conf max_tokens= or "+
+							"AURSCAN_OPENAI_MAX_TOKENS) and, for Gemma, set temperature=1.0", fr, maxTok)
+				}
+				return "", Usage{}, fmt.Errorf("openai: empty content from %s (finish_reason=%q)", u, fr)
+			}
 			usage := Usage{In: out.Usage.In, Out: out.Usage.Out}
 			if usage.In == 0 && usage.Out == 0 {
 				usage = Usage{In: estIn, Out: estimateTokens(text), Estimated: true}
