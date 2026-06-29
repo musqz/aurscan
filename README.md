@@ -375,6 +375,8 @@ Override the API price table (USD per million tokens) so you never depend on a s
 aurscan --rules-only <pkgname|./dir>     # or set AURSCAN_RULES_ONLY=1
 ```
 
+**Quote-aware — obfuscation does not slip past.** The command, flag and path rules do not match raw text. The `PKGBUILD` and `.install` scripts are parsed with a real shell parser ([`mvdan.cc/sh`](https://github.com/mvdan/sh), pure-Go, vendored, **never executed**) and the rules run against the *deobfuscated* command view. So split-token tricks like `s"ud"o`, `cu""rl … | sh`, `su$'\x64'o` and `${IFS:0:0}sudo` are caught as the commands they actually run, while a `sudo` printed inside an `echo` instruction is correctly ignored instead of false-flagging. The splicing itself is also reported as **`OBF-004` (critical)** — a PKGBUILD has no honest reason to disguise a command name, so any attempt is treated as a strong signal in its own right, even when the disguised command is otherwise harmless.
+
 ## Safety model
 
 - **Fail-closed.** A backend error, timeout, or unparseable output is first retried against the next backend in the chain; once every configured backend is exhausted — or on a fetch failure — the result becomes **SUSPICIOUS** and blocks the build. The scanner can fail, but it never fails *open*.
@@ -387,6 +389,7 @@ aurscan --rules-only <pkgname|./dir>     # or set AURSCAN_RULES_ONLY=1
 - It is a heuristic, not a verifier. Build in a clean chroot when you can.
 - `npm`, `bun`, `pip`, `go`, and `curl` are sometimes legitimate (Electron apps building from source, for instance), so expect occasional **false positives**. That is the safer direction to err.
 - The wrapper enables yay's edit prompt for every AUR build. That is the price of seeing every script. Pass your own `--editor` and aurscan scans first, then chains to it.
+- **Shell deobfuscation is bash-grade.** `PKGBUILD` and `.install` are bash, which is exactly what the parser handles (it also understands POSIX `sh` and `mksh`). Two things stay out of its reach by nature: obfuscation hidden *inside another language* — a reverse shell split across a `python -c '…'` or `perl -e '…'` string — is not un-spliced by a shell parser (the embedded interpreter call is still seen; the model is the backstop for in-language tricks); and values that only exist at build time — `$(…)`, `${var}` taken from the environment, deeply nested `eval` — cannot be resolved by any static tool. A file the parser cannot read at all falls back to raw-text matching, so detection is never lost.
 
 ## Project layout
 

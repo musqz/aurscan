@@ -6,6 +6,29 @@ on:
   pull_request:
 
 jobs:
+  # Fail the build if go.sum
+  # integrity is off, or if vendor/ has drifted from go.mod/go.sum (e.g. the dep
+  # was bumped but `go mod vendor` wasn't re-run and committed).
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod # tracks the toolchain in go.mod, no hardcoding
+
+      - name: verify module checksums against go.sum
+        run: go mod verify
+
+      - name: vendor/ is in sync with go.mod / go.sum
+        run: |
+          go mod tidy
+          go mod vendor
+          if ! git diff --exit-code -- go.mod go.sum vendor/; then
+            echo "::error::go.mod/go.sum/vendor are out of date. Run 'go mod tidy && go mod vendor' and commit the result."
+            exit 1
+          fi
+
   # Runs on every push and PR.
   test:
     runs-on: ubuntu-latest

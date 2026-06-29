@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Shell-aware rules defeat split-token obfuscation (#43).** The command, flag
+  and path rules now run against a *deobfuscated* view of each `PKGBUILD` /
+  `.install`, parsed with a real shell parser ([`mvdan.cc/sh`](https://github.com/mvdan/sh),
+  pure-Go, vendored, never executed). Quote- and encoding-splitting that kept the
+  runtime command equal to `sudo` / `curl … | sh` but broke the literal — `s"ud"o`,
+  `s''udo`, `su$'\x64'o`, line continuations, `${IFS:0:0}sudo` — is now caught as
+  the command it actually runs. ~27 command/flag/path rules were bypassable this
+  way; the data-literal rules (URLs, hosts, `\xNN`, `SKIP`) were not and are
+  unchanged.
+- **`OBF-004` — obfuscated command (token splicing).** Because a PKGBUILD has no
+  honest reason to disguise a command name, the splicing itself is now flagged
+  **critical**, independently of what the command is: interior quoting (`cu""rl`,
+  `/etc/su""doers`), ANSI-C encoding (`su$'\x64'o`), and `${IFS…}` separator
+  injection. Ordinary interpolation (`$pkgname-$pkgver`, `--prefix="/usr"`,
+  `lib${pkgname}.so`) is deliberately *not* flagged.
+
+### Fixed
+- **`PRIV-001` no longer false-positives on echo'd instructions (#43).** A `sudo`
+  printed inside an `echo` string (post-install guidance in a `.install` hook) is
+  data, not a command, and is no longer flagged — the regex could not tell a
+  command position from quoted text, the shell parser can. Reported on
+  `un-lock-git`.
+
+### Changed
+- **First vendored dependency: `mvdan.cc/sh/v3` (#43).** The shell parser (its
+  `syntax`/`fileutil` packages only — pure Go, no cgo) is committed under
+  `vendor/`, so the static single-binary build and the hardened release flags are
+  unchanged and `go build` stays fully offline. `install.sh` and the `Makefile`
+  force `-mod=vendor` when `vendor/` is present. None of the parser's test-only
+  modules are compiled in.
+
 ## [0.6.4] - 2026-06-29
 
 ### Added

@@ -31,7 +31,12 @@ resolve_version() {
 build() {
   command -v go >/dev/null || { echo "Go is required to build aurscan"; exit 1; }
   resolve_version
-  CGO_ENABLED=0 go build -trimpath \
+  # Build offline from the committed vendor/ tree when present (and force it, so
+  # a GOFLAGS=-mod=mod in the environment can't pull a non-vendored version).
+  # A source tarball shipped without vendor/ falls back to normal module mode.
+  local modflag=()
+  [ -d vendor ] && modflag=(-mod=vendor)
+  CGO_ENABLED=0 go build "${modflag[@]}" -trimpath \
     -ldflags="-s -w -X ${PKGPATH}.Version=${VERSION} -X ${PKGPATH}.Commit=${COMMIT} -X ${PKGPATH}.Date=${DATE}" \
     -o aurscan ./cmd/aurscan
 }

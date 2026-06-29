@@ -14,6 +14,10 @@ LDFLAGS := -s -w \
 	-X $(PKGPATH).Date=$(DATE)
 GOFLAGS := -trimpath -buildmode=pie -ldflags="$(LDFLAGS)"
 
+# Build offline from vendor/ when it is present (forced, so a GOFLAGS=-mod=mod
+# in the environment can't override it); empty for a tarball without vendor/.
+MODFLAG := $(if $(wildcard vendor),-mod=vendor,)
+
 # Release artifacts are hardened to match Arch's Go package guidelines: PIE +
 # full RELRO, while staying static and portable. Full RELRO (DT_BIND_NOW) needs
 # the external linker, so CGO is enabled purely as the link driver; netgo and
@@ -26,7 +30,7 @@ REL_LDFLAGS := $(LDFLAGS) -linkmode=external -extldflags '-static-pie -Wl,-z,rel
 REL_FLAGS   := -trimpath -buildmode=pie -tags 'netgo osusergo' -ldflags="$(REL_LDFLAGS)"
 
 build:
-	CGO_ENABLED=0 go build $(GOFLAGS) -o $(BIN) ./cmd/aurscan
+	CGO_ENABLED=0 go build $(MODFLAG) $(GOFLAGS) -o $(BIN) ./cmd/aurscan
 
 version: build
 	./$(BIN) --version
@@ -36,8 +40,8 @@ test:
 	go test ./...
 
 release:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(REL_FLAGS) -o aurscan-linux-amd64 ./cmd/aurscan
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_arm64) go build $(REL_FLAGS) -o aurscan-linux-arm64 ./cmd/aurscan
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(MODFLAG) $(REL_FLAGS) -o aurscan-linux-amd64 ./cmd/aurscan
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_arm64) go build $(MODFLAG) $(REL_FLAGS) -o aurscan-linux-arm64 ./cmd/aurscan
 
 install: build
 	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)

@@ -249,14 +249,38 @@ func Scan(files map[string]string) []Hit {
 				break
 			}
 		}
+		// Deobfuscated command view for shell files (issue #43). Command/flag
+		// rules are matched against this quote-removed, command-position-aware
+		// view so split-token tricks are caught and echo-string text does not
+		// false-positive. A parse failure falls back to raw-text matching.
+		isShell := isPKGBUILD || isInstall || strings.HasSuffix(name, ".sh")
+		var cmds []cmdLine
+		parsed := false
+		if isShell {
+			if c, err := extractCommands(text); err == nil {
+				cmds, parsed = c, true
+			}
+		}
 		for _, r := range catalog {
 			// INSTALL-003 only applies to .install hook scripts.
 			if r.Code == "INSTALL-003" && !isInstall {
 				continue
 			}
-			// Find the first match that is not on a commented-out line. AI
-			// prompt-injection text is still relevant in comments because the
-			// model sees comments as package text.
+			if commandScoped[r.Code] && parsed {
+				// Match against the deobfuscated command stream. The trailing
+				// space lets patterns anchored on `\s` after a command word fire
+				// on a command that ends the line.
+				for _, c := range cmds {
+					if r.re.MatchString(c.text + " ") {
+						add(r.Code, r.Name, r.Severity, name, c.text)
+						break
+					}
+				}
+				continue
+			}
+			// Data-literal rules (and the fallback when shell parsing failed):
+			// match the raw text, skipping commented-out lines except where the
+			// pattern is meaningful in comments (AI injection, bidi/zero-width).
 			idx := firstLiveMatch(text, r.re, !scanEvenInComments(r.Code))
 			if idx < 0 {
 				continue
@@ -265,6 +289,15 @@ func Scan(files map[string]string) []Hit {
 				continue // SKIP is expected for VCS sources
 			}
 			add(r.Code, r.Name, r.Severity, name, lineAround(text, idx))
+		}
+		// OBF-004: token-splicing obfuscation is itself a strong malicious signal
+		// — a PKGBUILD has no benign reason to disguise a command with interior
+		// quotes or ANSI-C encoding. Flagged regardless of what the command is.
+		for _, c := range cmds {
+			if c.obf {
+				add("OBF-004", "Obfuscated command (token splicing)", Critical, name, c.text)
+				break
+			}
 		}
 		// SRC-001: flag VCS sources on hosts that are NOT well-known forges or
 		// official distribution / upstream Git hosts. Only on PKGBUILD.
