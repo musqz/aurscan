@@ -220,6 +220,8 @@ set -Ux AURSCAN_OPENAI_URL http://localhost:4000/v1/chat/completions
 set -Ux AURSCAN_OPENAI_API_KEY sk-your-litellm-key
 ```
 
+> **Community tip:** to drive aurscan from a hosted provider (OpenRouter, Nvidia NIM, …) and switch models on the fly without LiteLLM, [LLamification](https://github.com/magillos/LLamification) presents one as a local OpenAI-compatible endpoint — point `AURSCAN_OPENAI_URL` at it ([#41](https://github.com/manticore-projects/aurscan/discussions/41)).
+
 The key is sent as `Authorization: Bearer <key>`. With `AURSCAN_OPENAI_API_KEY` unset, aurscan falls back to `OPENAI_API_KEY`. Leave both unset for an open local server that needs no auth.
 
 On a slow, CPU-only host the default 180&nbsp;s budget can expire before the model finishes, and you will see `context deadline exceeded`. Raise it, and make sure the model's context window is large enough for the prompt. A package is typically several thousand tokens, and Ollama's 2048 default will silently truncate it:
